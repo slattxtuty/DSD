@@ -6,14 +6,14 @@ import pyautogui
 import random
 import pyperclip
 import win32com.client
-
+from bs4 import BeautifulSoup
 # === ВКЛ/ВЫКЛ основных функций ===
-DO_GOOGLE_AND_FIVERR = False
-DO_AUTH = False
+DO_GOOGLE_AND_FIVERR = True
+DO_AUTH = True
 DO_PROFILE_SETUP = False
 DO_GO_TO_CATEGORY = True  # <-- переход в новую категорию
-
-DO_FIND_NEW_MEMBERS = True  # <-- новая функция поиска новых участников
+DO_FIND_NEW_MEMBERS = True  # <--  функция парса
+DO_OPEN_ALL_NEW_MEMBERS = True #<-сохранение новых мембов в файл
 
 # === Настройки путей ===
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -259,10 +259,12 @@ def profile_setup(tab, photo_for_profile, used_photos_file):
 
 def go_to_category(tab):
     # 1. Переход на нужную категорию
+    import time
+    import os
+    target_month_year = "Jun 2025"
     url = "https://www.fiverr.com/categories/music-audio/singers-vocalists?source=category_tree"
     tab.call_method("Page.navigate", url=url)
     time.sleep(5)
-
     # 2. Клик по "Seller details"
     tab.call_method(
         "Runtime.evaluate",
@@ -566,7 +568,7 @@ def go_to_category(tab):
     
     print(f"Поиск завершен! Найдено участников: {found_members}/{target_members}")
 
-def find_new_members(tab):
+
     """
     Поиск 7 участников зарегистрированных в June 2025
     """
@@ -881,6 +883,305 @@ def find_new_members(tab):
     
     print(f"Поиск завершен! Найдено участников: {found_members}/{target_members}")
 
+
+    """
+    Парсит до 20 ссылок на объявления из исходного HTML-кода страницы (ищет <a ... aria-label="Go to gig" ... href="...pos=...">)
+    и сохраняет их в new_members_file с удобной нумерацией.
+    """
+    print("Сохраняем исходный HTML страницы...")
+
+    # Получаем весь HTML страницы
+    html_result = tab.call_method("Runtime.evaluate", expression="document.documentElement.outerHTML")
+    html = html_result.get("result", {}).get("value", "")
+
+    # Парсим HTML
+    soup = BeautifulSoup(html, 'html.parser')
+    links = []
+    for a in soup.find_all('a', href=True, attrs={'aria-label': 'Go to gig'}):
+        href = a['href']
+        if 'pos=' in href:
+            # Преобразуем относительную ссылку в абсолютную
+            if href.startswith('/'):
+                href = "https://www.fiverr.com" + href
+            if href not in links:
+                links.append(href)
+        if len(links) >= 20:
+            break
+
+    print(f"Найдено ссылок: {len(links)}")
+    if links:
+        with open(new_members_file, "w", encoding="utf-8") as f:
+            for idx, url in enumerate(links, 1):
+                f.write(f"{idx}. {url}\n")
+        print(f"Ссылки успешно сохранены в {new_members_file} с нумерацией")
+    else:
+        print("Ссылки на объявления не найдены.")
+
+
+    """
+    Открывает первую ссылку из файла new_members_file в браузере (игнорируя нумерацию),
+    затем находит и выводит дату регистрации пользователя ("Member since ...").
+    """
+    import os
+    import time
+
+    print(f"Читаем файл ссылок: {new_members_file}")
+    if not os.path.exists(new_members_file):
+        print("Файл ссылок не найден!")
+        return
+
+    url = None
+    with open(new_members_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # Убираем возможную нумерацию ("1. " или "01. ")
+            parts = line.split(". ", 1)
+            url = parts[1] if len(parts) > 1 else parts[0]
+            # Проверяем, что это действительно ссылка
+            if url.startswith("http"):
+                print(f"Открываем первую ссылку: {url}")
+                tab.call_method("Page.navigate", url=url)
+                time.sleep(5)  # Можно увеличить, если страница грузится долго
+                break
+
+    if not url:
+        print("В файле не найдено подходящих ссылок.")
+        return
+
+    # === Поиск и вывод даты регистрации пользователя ===
+    # Ждем полной загрузки страницы
+    time.sleep(2)
+    result = tab.call_method(
+        "Runtime.evaluate",
+        expression="""
+            var lis = document.querySelectorAll("ul.user-stats li");
+            for (var i = 0; i < lis.length; i++) {
+                if (lis[i].textContent.includes("Member since")) {
+                    var strong = lis[i].querySelector("strong");
+                    if (strong) {
+                        return strong.textContent.trim();
+                    }
+                }
+            }
+            return null;
+        """
+    )
+    reg_date = result.get("result", {}).get("value", None)
+    if reg_date:
+        print(f"Дата регистрации пользователя: {reg_date}")
+    else:
+        print("Дата регистрации не найдена.")
+
+
+    save_path = r"C:\Users\userr\Desktop\PPlearn\ParsedMembers.txt"
+    print(f"Читаем файл ссылок: {new_members_file}")
+    if not os.path.exists(new_members_file):
+        print("Файл ссылок не найден!")
+        return
+
+    urls = []
+    with open(new_members_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(". ", 1)
+            url = parts[1] if len(parts) > 1 else parts[0]
+            if url.startswith("http"):
+                urls.append(url)
+    if not urls:
+        print("В файле не найдено подходящих ссылок.")
+        return
+
+    # Читаем уже сохранённые ссылки, чтобы продолжать нумерацию (если файл уже существует)
+    parsed_links = []
+    if os.path.exists(save_path):
+        with open(save_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    parsed_links.append(line)
+
+    match_count = len(parsed_links)
+
+    for idx, url in enumerate(urls[:20], 1):
+        print(f"\n[{idx}] Открываем ссылку: {url}")
+        tab.call_method("Page.navigate", url=url)
+        time.sleep(5)  # Ждем загрузки страницы
+
+        # Основной способ поиска даты регистрации через user-stats
+        time.sleep(2)
+        result = tab.call_method(
+            "Runtime.evaluate",
+            expression="""
+                var lis = document.querySelectorAll("ul.user-stats li");
+                for (var i = 0; i < lis.length; i++) {
+                    if (lis[i].textContent.includes("Member since")) {
+                        var strong = lis[i].querySelector("strong");
+                        if (strong) {
+                            return strong.textContent.trim();
+                        }
+                    }
+                }
+                return null;
+            """
+        )
+        reg_date = result.get("result", {}).get("value", None)
+
+        # Альтернативный способ: поиск по всему HTML, если reg_date не найден
+        if not reg_date:
+            html_result = tab.call_method("Runtime.evaluate", expression="document.documentElement.outerHTML")
+            html = html_result.get("result", {}).get("value", "")
+            soup = BeautifulSoup(html, "html.parser")
+            found = False
+            for li in soup.find_all("li"):
+                if "Member since" in li.text:
+                    strong = li.find("strong")
+                    if strong and strong.text.strip():
+                        reg_date = strong.text.strip()
+                        found = True
+                        break
+            if not found:
+                import re
+                patterns = [
+                    r"[JFMASOND][a-z]+\s20\d\d",
+                    r"Member since\s*:? ?([A-Za-z]+\s20\d\d)",
+                ]
+                match = soup.find(string=re.compile(r"Member since\s*:? ?([A-Za-z]+\s20\d\d)"))
+                if match:
+                    m = re.search(r"Member since\s*:? ?([A-Za-z]+\s20\d\d)", match)
+                    if m:
+                        reg_date = m.group(1)
+                        found = True
+                if not found:
+                    for pattern in patterns:
+                        m = re.search(pattern, html)
+                        if m:
+                            reg_date = m.group(0)
+                            found = True
+                            break
+
+        if reg_date:
+            print(f"[{idx}] Дата регистрации пользователя: {reg_date}")
+            if reg_date == target_month_year:
+                match_count += 1
+                with open(save_path, "a", encoding="utf-8") as out:
+                    out.write(f"{match_count}. {url}\n")
+                print(f"[{idx}] Совпадение найдено! Ссылка сохранена в ParsedMembers.txt")
+        else:
+            print(f"[{idx}] Дата регистрации не найдена ни одним методом.")
+
+def open_all_new_members(tab, new_members_file, target_month_year="Jun 2025"):
+    """
+    Открывает до 20 ссылок, ищет дату регистрации пользователя,
+    если дата совпадает с target_month_year — сохраняет ссылку в ParsedMembers.txt с нумерацией.
+    """
+    from bs4 import BeautifulSoup
+
+    save_path = r"C:\Users\userr\Desktop\PPlearn\ParsedMembers.txt"
+    print(f"Читаем файл ссылок: {new_members_file}")
+    if not os.path.exists(new_members_file):
+        print("Файл ссылок не найден!")
+        return
+
+    urls = []
+    with open(new_members_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(". ", 1)
+            url = parts[1] if len(parts) > 1 else parts[0]
+            if url.startswith("http"):
+                urls.append(url)
+    if not urls:
+        print("В файле не найдено подходящих ссылок.")
+        return
+
+    # Читаем уже сохранённые ссылки для продолжения нумерации
+    match_count = 0
+    if os.path.exists(save_path):
+        with open(save_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and ". " in line:
+                    try:
+                        num = int(line.split(". ", 1)[0])
+                        match_count = max(match_count, num)
+                    except Exception:
+                        pass
+
+    for idx, url in enumerate(urls[:20], 1):
+        print(f"\n[{idx}] Открываем ссылку: {url}")
+        tab.call_method("Page.navigate", url=url)
+        time.sleep(5)
+
+        # Основной способ поиска даты регистрации через user-stats
+        time.sleep(2)
+        result = tab.call_method(
+            "Runtime.evaluate",
+            expression="""
+                var lis = document.querySelectorAll("ul.user-stats li");
+                for (var i = 0; i < lis.length; i++) {
+                    if (lis[i].textContent.includes("Member since")) {
+                        var strong = lis[i].querySelector("strong");
+                        if (strong) {
+                            return strong.textContent.trim();
+                        }
+                    }
+                }
+                return null;
+            """
+        )
+        reg_date = result.get("result", {}).get("value", None)
+
+        # Альтернативный способ: поиск по всему HTML, если reg_date не найден
+        if not reg_date:
+            html_result = tab.call_method("Runtime.evaluate", expression="document.documentElement.outerHTML")
+            html = html_result.get("result", {}).get("value", "")
+            soup = BeautifulSoup(html, "html.parser")
+            found = False
+            for li in soup.find_all("li"):
+                if "Member since" in li.text:
+                    strong = li.find("strong")
+                    if strong and strong.text.strip():
+                        reg_date = strong.text.strip()
+                        found = True
+                        break
+            if not found:
+                import re
+                patterns = [
+                    r"[JFMASOND][a-z]+\s20\d\d",
+                    r"Member since\s*:? ?([A-Za-z]+\s20\d\d)",
+                ]
+                match = soup.find(string=re.compile(r"Member since\s*:? ?([A-Za-z]+\s20\d\d)"))
+                if match:
+                    m = re.search(r"Member since\s*:? ?([A-Za-z]+\s20\d\d)", match)
+                    if m:
+                        reg_date = m.group(1)
+                        found = True
+                if not found:
+                    for pattern in patterns:
+                        m = re.search(pattern, html)
+                        if m:
+                            reg_date = m.group(0)
+                            found = True
+                            break
+
+        print(f"[{idx}] Дата регистрации пользователя: {reg_date}")
+
+        # --- Исправленное сравнение и сохранение ---
+        if reg_date and reg_date.strip().lower() == target_month_year.strip().lower():
+            match_count += 1
+            with open(save_path, "a", encoding="utf-8") as out:
+                out.write(f"{match_count}. {url}\n")
+            print(f"[{idx}] Совпадение найдено! Ссылка сохранена в ParsedMembers.txt")
+        else:
+            print(f"[{idx}] Не совпадает с целевой датой ({target_month_year}) или не найдена.")
+
+    print(f"\nОбработка завершена. Совпадений: {match_count}")
 # === Основная логика ===
 if DO_GOOGLE_AND_FIVERR:
     google_and_fiverr(tab)
@@ -894,7 +1195,6 @@ if DO_PROFILE_SETUP:
 if DO_GO_TO_CATEGORY:
     go_to_category(tab)
 
-if DO_FIND_NEW_MEMBERS:
-    find_new_members(tab)
-
+if DO_OPEN_ALL_NEW_MEMBERS:
+    open_all_new_members(tab, new_members_file)
 tab.stop()
